@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Hcap Worker Node</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: #1e1e2e;
+            color: #cdd6f4;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            margin: 0;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            width: 100%;
+            max-width: 400px;
+        }
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            background-color: #313244;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button.active { background-color: #89b4fa; color: #11111b; }
+        button.action { background-color: #a6e3a1; color: #11111b; }
+        button.clear { background-color: #f38ba8; color: #11111b; }
+        
+        /* New Status Buttons */
+        button.ready { background-color: #a6e3a1; color: #11111b; }
+        button.rest { background-color: #fab387; color: #11111b; }
+        
+        /* UI Protection Styling */
+        button:disabled { opacity: 0.4; cursor: not-allowed; filter: grayscale(50%); }
+
+        #workspace {
+            position: relative;
+            display: inline-block;
+            border: 2px solid #45475a;
+            border-radius: 4px;
+            overflow: hidden;
+            /* Prevents long-press context menus on mobile */
+            -webkit-touch-callout: none;
+            user-select: none;
+            touch-action: pan-y; /* Allows vertical scrolling without accidental clicks! */
+        }
+        #puzzle-img {
+            display: block;
+            max-width: 100%;
+            height: auto;
+        }
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+        }
+        #output {
+            margin-top: 15px;
+            width: 100%;
+            max-width: 400px;
+            background: #181825;
+            padding: 10px;
+            border-radius: 8px;
+            font-family: monospace;
+            word-wrap: break-word;
+            text-align: center;
+            box-sizing: border-box;
+        }
+
+        /* Login Screen Overlay */
+        #login-screen { 
+            position: fixed; 
+            top: 0; left: 0; 
+            width: 100%; height: 100%; 
+            background: #11111b; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            z-index: 100; 
+        }
+        #login-screen input { 
+            padding: 12px; margin: 5px; 
+            border-radius: 6px; border: none; 
+            width: 250px; 
+            background: #313244; color: white; 
+        }
+        
+        /* Status Badge */
+        #status-badge { 
+            font-weight: bold; 
+            padding: 5px 10px; 
+            border-radius: 12px; 
+            margin-bottom: 15px; 
+            font-size: 14px; 
+        }
+        .badge-offline { background: #f38ba8; color: #11111b; }
+        .badge-online { background: #a6e3a1; color: #11111b; }
+    </style>
+</head>
+<body>
+
+    <!-- AUTHENTICATION SCREEN -->
+    <div id="login-screen">
+        <h2>Worker Login</h2>
+        <input type="text" id="username" placeholder="Username">
+        <input type="password" id="password" placeholder="Password">
+        <button onclick="attemptLogin()" style="background: #89b4fa; color: #11111b; width: 274px; margin-top: 10px; flex: none;">Login</button>
+        <p id="login-error" style="color: #f38ba8; display: none; margin-top: 15px;">Invalid credentials.</p>
+    </div>
+
+    <!-- STATUS & SETTINGS BAR -->
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 4px; margin-bottom: 20px; width: 100%; max-width: 400px;">
+        <div id="status-badge" class="badge-offline" style="margin-bottom: 0; padding: 6px 6px; font-size: 11px; white-space: nowrap; text-align: center;">Status: OFFLINE</div>
+        
+        <button id="btn-mute" onclick="toggleMute()" style="background-color: #89b4fa; color: #11111b; border: none; padding: 6px 4px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 11px; transition: 0.2s; white-space: nowrap; flex: 1;">🦆 Sound: ON</button>
+        
+        <button id="btn-members" onclick="fetchOnlineMembers()" style="background-color: #cba6f7; color: #11111b; border: none; padding: 6px 4px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 11px; transition: 0.2s; white-space: nowrap; flex: 1;">👥 Online</button>
+        
+        <button id="btn-messages" onclick="openMessagesModal()" style="background-color: #f9e2af; color: #11111b; border: none; padding: 6px 4px; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 11px; transition: 0.2s; white-space: nowrap; flex: 1;">💬 Msgs</button>
+    </div>
+    
+    <div class="controls">
+        <button id="btn-ready" class="ready" onclick="setStatus('online')">🟢 I'm Ready</button>
+        <button id="btn-rest" class="rest" onclick="setStatus('offline')" disabled>🛏️ Take a Rest</button>
+    </div>
+
+    <!-- Hidden Audio Element -->
+    <audio id="quack-sound" preload="auto">
+        <source src="/assets/quack.mp3" type="audio/mpeg">
+    </audio>
+
+    <div class="controls">
+        <button id="btn-click" class="active" onclick="setMode('click')">🖱️ Click Mode</button>
+        <button id="btn-drag" onclick="setMode('drag')">🔲 Drag Mode</button>
+    </div>
+
+    <!-- The Instructions Banner -->
+    <div id="instruction-box" style="width: 100%; max-width: 400px; background: #313244; padding: 10px; border-radius: 8px; margin-bottom: 15px; text-align: center; font-weight: bold; box-sizing: border-box; position: relative;">
+        <!-- The visual pressure bar -->
+        <div id="timer-bar" style="height: 4px; background: #a6e3a1; width: 0%; position: absolute; top: 0; left: 0; border-top-left-radius: 8px; border-top-right-radius: 8px; transition: width 1s linear, background-color 0.5s;"></div>
+        
+        <span id="question-text" style="display: block; font-size: 14px; margin-bottom: 5px; margin-top: 5px;">Waiting for puzzle...</span>
+        <img id="question-img" src="" style="display: none; max-width: 100%; max-height: 80px; border-radius: 4px;" alt="Reference">
+        
+        <!-- The text countdown -->
+        <div id="countdown-text" style="display: none; font-size: 13px; margin-top: 8px;">⏳ 20s remaining</div>
+    </div>
+
+    <!-- The interaction zone -->
+    <div id="workspace">
+        <img id="puzzle-img" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" alt="Puzzle" />
+        <canvas id="overlay"></canvas>
+    </div>
+
+    <div class="controls" style="margin-top: 20px;">
+        <button id="btn-skip-bot" style="background-color: #fab387; color: #11111b;" onclick="skipTask()" disabled>🫑 Skip</button>
+        <button id="btn-clear" class="clear" onclick="clearCanvas()" disabled>🗑️ Clear</button>
+        <button id="btn-submit" class="action" onclick="submitSolution()" disabled>🚀 Submit</button>
+    </div>
+
+    <div id="output">App Started.</div>
+
+    <div id="members-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(17, 17, 27, 0.8); z-index: 200; justify-content: center; align-items: center;">
+        <div style="background: #313244; padding: 20px; border-radius: 8px; width: 80%; max-width: 300px; text-align: center; border: 2px solid #45475a;">
+            <h3 style="margin-top: 0; color: #cdd6f4;">Online Members</h3>
+            <ul id="members-list" style="list-style: none; padding: 0; margin-bottom: 20px; color: #a6e3a1; font-weight: bold; min-height: 50px; font-size: 16px;">
+                </ul>
+            <button onclick="closeMembersModal()" style="background: #f38ba8; color: #11111b; width: 100%;">Close</button>
+        </div>
+    </div>
+
+    <div id="messages-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(17, 17, 27, 0.8); z-index: 200; justify-content: center; align-items: center;">
+        <div style="background: #313244; padding: 20px; border-radius: 8px; width: 80%; max-width: 350px; display: flex; flex-direction: column; gap: 10px; border: 2px solid #45475a;">
+            <h3 style="margin-top: 0; margin-bottom: 5px; color: #cdd6f4; text-align: center;">Team Messages</h3>
+            
+            <div id="messages-container" style="background: #1e1e2e; height: 150px; overflow-y: auto; padding: 10px; border-radius: 6px; text-align: left; font-size: 14px; color: #cdd6f4; word-wrap: break-word;">
+            </div>
+            
+            <div style="display: flex; gap: 8px; margin-top: 5px;">
+                <input type="text" id="message-input" placeholder="Type a message..." style="flex: 1; padding: 8px; border-radius: 6px; border: none; background: #181825; color: white;">
+                <button onclick="sendMessage()" style="background: #a6e3a1; color: #11111b; width: auto; padding: 8px 12px; font-size: 13px;">Leave a message</button>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-top: 10px;">
+                <button onclick="closeMessagesModal()" style="background: #89b4fa; color: #11111b; flex: 1;">Close</button>
+                <button onclick="deleteAllMessages()" style="background: #f38ba8; color: #11111b; flex: 1;">Delete All</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ==========================================
+        // STATE & DOM VARIABLES
+        // ==========================================
+        const img = document.getElementById('puzzle-img');
+        const canvas = document.getElementById('overlay');
+        const ctx = canvas.getContext('2d');
+        const output = document.getElementById('output');
+        const badge = document.getElementById('status-badge');
+
+        let mode = 'click';
+        let coordinates = [];
+        let tempStart = null;
+        let isOnline = false;
+        let heartbeatInterval = null;
+        let puzzleTimerInterval = null;
+        let timeLeft = 20;
+        let isMuted = false;
+        let currentTaskId = null;
+
+       // Retrieve credentials from localStorage if they exist to survive refreshes/mobile tab sleep
+        let savedUsername = localStorage.getItem('worker_user') || "";
+        let savedPassword = localStorage.getItem('worker_pass') || "";
+
+        // ==========================================
+        // WEBSOCKET SETUP & LIFECYCLE
+        // ==========================================
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = wsProtocol + '//' + window.location.host + '/ws';
+        let ws = null;
+        let reconnectTimeout = null;
+
+        // ==========================================
+        // UI & AUDIO CONTROLS
+        // ==========================================
+        
+        function setPuzzleControlsState(enabled) {
+            const btnSkip = document.getElementById('btn-skip-bot');
+            const btnSubmit = document.getElementById('btn-submit');
+            const btnClear = document.getElementById('btn-clear');
+            if (btnSkip) btnSkip.disabled = !enabled;
+            if (btnSubmit) btnSubmit.disabled = !enabled;
+            if (btnClear) btnClear.disabled = !enabled;
+        }
+        
+        function toggleMute() {
+            isMuted = !isMuted;
+            const muteBtn = document.getElementById('btn-mute');
+            if (isMuted) {
+                muteBtn.innerText = "🦆 Sound: OFF";
+                muteBtn.style.backgroundColor = "#585b70";
+                muteBtn.style.color = "#cdd6f4";
+            } else {
+                muteBtn.innerText = "🦆 Sound: ON";
+                muteBtn.style.backgroundColor = "#89b4fa";
+                muteBtn.style.color = "#11111b";
+            }
+        }
+
+        function setMode(newMode) {
+            mode = newMode;
+            tempStart = null;
+            document.getElementById('btn-click').classList.toggle('active', mode === 'click');
+            document.getElementById('btn-drag').classList.toggle('active', mode === 'drag');
+            redraw();
+        }
+
+        function syncUIWithServer(state) {
+            isOnline = (state === "online");
+            const btnReady = document.getElementById('btn-ready');
+            const btnRest = document.getElementById('btn-rest');
+            
+            if (isOnline) {
+                badge.innerText = "Status: ONLINE";
+                badge.className = "badge-online";
+                btnReady.disabled = true;
+                btnRest.disabled = false;
+            } else {
+                badge.innerText = "Status: OFFLINE";
+                badge.className = "badge-offline";
+                btnReady.disabled = false;
+                btnRest.disabled = true;
+                
+                currentTaskId = null;
+                setPuzzleControlsState(false);
+                stopPuzzleTimer();
+                clearCanvas();
+                document.getElementById('question-text').innerText = "Paused. Taking a rest.";
+                img.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+                document.getElementById('question-img').style.display = 'none';
+            }
+        }
+
+        // ==========================================
+        // TIMERS & HEARTBEATS
+        // ==========================================
+        function startHeartbeat() {
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            heartbeatInterval = setInterval(() => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "heartbeat" }));
+                }
+            }, 5000);
+        }
+
+        function startPuzzleTimer() {
+            stopPuzzleTimer();
+            timeLeft = 20;
+            const timerBar = document.getElementById('timer-bar');
+            const countdownText = document.getElementById('countdown-text');
+            
+            timerBar.style.width = '100%';
+            timerBar.style.backgroundColor = '#a6e3a1';
+            countdownText.style.display = 'block';
+            countdownText.innerText = `⏳ ${timeLeft}s remaining`;
+            
+            puzzleTimerInterval = setInterval(() => {
+                timeLeft--;
+                countdownText.innerText = `⏳ ${timeLeft}s remaining`;
+                timerBar.style.width = `${(timeLeft / 20) * 100}%`;
+                
+                if (timeLeft <= 5) timerBar.style.backgroundColor = '#f38ba8';
+                else if (timeLeft <= 10) timerBar.style.backgroundColor = '#fab387';
+
+                if (timeLeft <= 0) {
+                    stopPuzzleTimer();
+                    countdownText.innerText = "⏳ Time's up!";
+                }
+            }, 1000);
+        }
+
+        function stopPuzzleTimer() {
+            if (puzzleTimerInterval) clearInterval(puzzleTimerInterval);
+            document.getElementById('timer-bar').style.width = '0%';
+            document.getElementById('countdown-text').style.display = 'none';
+        }
+
+        // ==========================================
+        // CANVAS & DRAWING LOGIC
+        // ==========================================
+        img.onload = () => {
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+            redraw();
+        };
+
+        function clearCanvas() {
+            coordinates = [];
+            tempStart = null;
+            redraw();
+            output.innerText = "Cleared.";
+        }
+
+        function drawDot(x, y, color, borderColor = "#11111b") {
+            ctx.beginPath();
+            ctx.arc(x, y, 8, 0, 2 * Math.PI);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.strokeStyle = borderColor;
+            ctx.lineWidth = 2; 
+            ctx.stroke();
+        }
+
+        function drawArrow(sx, sy, ex, ey) {
+            const headlen = 18; 
+            const dx = ex - sx;
+            const dy = ey - sy;
+            const angle = Math.atan2(dy, dx);
+            
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.lineTo(ex - headlen * Math.cos(angle - Math.PI / 6), ey - headlen * Math.sin(angle - Math.PI / 6));
+            ctx.moveTo(ex, ey);
+            ctx.lineTo(ex - headlen * Math.cos(angle + Math.PI / 6), ey - headlen * Math.sin(angle + Math.PI / 6));
+            ctx.strokeStyle = "#FFA500"; // Change arrow to Orange
+            ctx.lineWidth = 5; 
+            ctx.stroke();
+
+            // Draw the tail: Black dot with an Orange border
+            drawDot(sx, sy, "#11111b", "#FFA500");
+        }
+        
+        function redraw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            coordinates.forEach(coord => {
+                if (coord.type === 'click') {
+                    drawDot(coord.x, coord.y, "#f5c2e7"); // Pinky dots
+                } else if (coord.type === 'drag') {
+                    drawArrow(coord.startX, coord.startY, coord.endX, coord.endY);
+                }
+            });
+            
+            if (tempStart) {
+                drawDot(tempStart.x, tempStart.y, "#FFA500");
+            }
+        }
+
+        // Prevent default right-click menu anywhere on the page and toggle modes
+        document.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            setMode(mode === 'click' ? 'drag' : 'click');
+        });
+
+        canvas.addEventListener('click', (e) => {
+            if (!isOnline) {
+                output.innerText = "You must be ONLINE to interact.";
+                return;
+            }
+            
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = Math.round((e.clientX - rect.left) * scaleX);
+            const y = Math.round((e.clientY - rect.top) * scaleY);
+
+            if (mode === 'click') {
+                coordinates.push({ type: 'click', x, y });
+                redraw();
+            } else if (mode === 'drag') {
+                if (!tempStart) {
+                    tempStart = { x, y };
+                    drawDot(x, y, "#FFA500");
+                } else {
+                    coordinates.push({ type: 'drag', startX: tempStart.x, startY: tempStart.y, endX: x, endY: y });
+                    tempStart = null;
+                    redraw();
+                }
+            }
+        });
+
+        // ==========================================
+        // SERVER COMMUNICATION
+        // ==========================================
+        function attemptLogin() {
+            const u = document.getElementById('username').value;
+            const p = document.getElementById('password').value;
+            savedUsername = u;
+            savedPassword = p;
+
+            // Save credentials to localStorage so they persist on disk
+            localStorage.setItem('worker_user', u);
+            localStorage.setItem('worker_pass', p);
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "auth", username: u, password: p }));
+            } else {
+                document.getElementById('login-error').style.display = 'block';
+                document.getElementById('login-error').innerText = "Connecting to server... Please wait.";
+                connect();
+            }
+        }
+
+        function setStatus(state) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "set_status", state: state }));
+            } else {
+                output.innerText = "Offline. Reconnection in progress...";
+            }
+        }
+
+        function skipTask() {
+            if (!isOnline) {
+                alert("You must be ONLINE to skip tasks!");
+                return;
+            }
+            if (!currentTaskId) {
+                alert("No active puzzle to skip!");
+                return;
+            }
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const sendingId = currentTaskId;
+                currentTaskId = null;
+                setPuzzleControlsState(false);
+                
+                ws.send(JSON.stringify({
+                    type: "skip_task",
+                    task_id: sendingId
+                }));
+                output.innerText = "⏭️ Remote skip sent! Rotating instance...";
+                clearCanvas();
+                stopPuzzleTimer();
+                document.getElementById('question-text').innerText = "Waiting for next puzzle...";
+                img.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+                document.getElementById('question-img').style.display = 'none';
+            }
+        }
+        
+        function submitSolution() {
+            if (!isOnline) {
+                alert("You must be ONLINE to submit answers!");
+                return;
+            }
+            if (!currentTaskId) {
+                alert("No active puzzle to submit!");
+                return;
+            }
+            if (coordinates.length === 0) {
+                alert("Nothing to submit!");
+                return;
+            }
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const sendingId = currentTaskId;
+                currentTaskId = null;
+                setPuzzleControlsState(false);
+                
+                ws.send(JSON.stringify({
+                    type: "solution",
+                    task_id: sendingId,
+                    coords: coordinates
+                }));
+                
+                output.innerText = "🚀 Solution sent! Standing by...";
+                clearCanvas();
+                stopPuzzleTimer();
+                
+                document.getElementById('question-text').innerText = "Waiting for next puzzle...";
+                img.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+                document.getElementById('question-img').style.display = 'none';
+            } else {
+                alert("Connection lost. Retrying server connection.");
+            }
+        }
+
+        function connect() {
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            
+            output.innerText = "Connecting to server...";
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = function() {
+                output.innerText = "Connected to server.";
+                document.getElementById('login-error').style.display = 'none';
+                
+                // Trigger auto-login if credentials exist in memory
+                if (savedUsername && savedPassword) {
+                    output.innerText = "Reconnected! Recovering session...";
+                    ws.send(JSON.stringify({ type: "auth", username: savedUsername, password: savedPassword }));
+                }
+            };
+
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === "auth_success") {
+                        document.getElementById('login-screen').style.display = 'none';
+                        output.innerText = "Logged in. UI synced with server.";
+                        syncUIWithServer(data.state);
+                        startHeartbeat();
+                        
+                    } else if (data.type === "auth_fail") {
+                        // Clear invalid credentials from localStorage and memory
+                        localStorage.removeItem('worker_user');
+                        localStorage.removeItem('worker_pass');
+                        savedUsername = "";
+                        savedPassword = "";
+                        document.getElementById('login-screen').style.display = 'flex';
+                        document.getElementById('login-error').style.display = 'block';
+                        document.getElementById('login-error').innerText = "Invalid credentials.";
+                        
+                    } else if (data.type === "status_ack") {
+                        syncUIWithServer(data.state);
+                        if (data.reason === "timeout") {
+                            output.innerText = "Kicked for inactivity.";
+                        }
+                        
+                    } else if (data.type === "clear_task") {
+                        // 🛡️ GHOST WIPE SHIELD: Ignore if clear_task belongs to an old/different puzzle
+                        if (data.task_id && currentTaskId && data.task_id !== currentTaskId) {
+                            console.log(`[Shield] Ignored stale clear_task for ${data.task_id}. Active puzzle is ${currentTaskId}`);
+                            return;
+                        }
+                        
+                        currentTaskId = null;
+                        setPuzzleControlsState(false);
+                        clearCanvas();
+                        stopPuzzleTimer();
+                        output.innerText = "Task solved or cleared. Standing by...";
+                        document.getElementById('question-text').innerText = "Waiting for next puzzle...";
+                        img.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+                        document.getElementById('question-img').style.display = 'none';
+                        
+                    } else if (data.type === "new_puzzle") {
+                        if (!isOnline) return;
+                        currentTaskId = data.task_id;
+                        setPuzzleControlsState(true);
+                        
+                        // --- FRONTEND RESTORATION ---
+                        // Reverse the backend optimization: remove the injected blue background (25, 113, 194) 
+                        // and apply a CSS filter to counteract JPEG quality loss and dullness.
+                        const tempImg = new Image();
+                        // Assume it's a JPEG now based on backend processing
+                        tempImg.src = data.canvas.startsWith('data:') ? data.canvas : "data:image/jpeg;base64," + data.canvas;
+                        
+                        tempImg.onload = () => {
+                            const tcvs = document.createElement('canvas');
+                            const tctx = tcvs.getContext('2d');
+                            tcvs.width = tempImg.width;
+                            tcvs.height = tempImg.height;
+                            tctx.drawImage(tempImg, 0, 0);
+                            
+                            const imgData = tctx.getImageData(0, 0, tcvs.width, tcvs.height);
+                            const px = imgData.data;
+                            
+                            // Tolerance set to 40 to account for JPEG compression artifacts around edges
+                            for (let i = 0; i < px.length; i += 4) {
+                                if (Math.abs(px[i] - 25) < 40 && 
+                                    Math.abs(px[i+1] - 113) < 40 && 
+                                    Math.abs(px[i+2] - 194) < 40) {
+                                    px[i+3] = 0; // Restore transparency (Alpha = 0)
+                                }
+                            }
+                            tctx.putImageData(imgData, 0, 0);
+                            
+                            // Re-apply to the DOM (this will automatically trigger your existing img.onload for coordinates)
+                            img.src = tcvs.toDataURL("image/png");
+                            
+                            // Enhance sharpness & color to recover original quality visually
+                            img.style.filter = "contrast(1.15) saturate(1.15) brightness(1.05)";
+                        };
+                        
+                        const questionText = data.question_string || "No question provided.";
+                        document.getElementById('question-text').innerText = questionText;
+                        
+                        if (questionText.toLowerCase().includes("drag") || questionText.toLowerCase().includes("move") || questionText.toLowerCase().includes("place the") || questionText.toLowerCase().includes("put the")) {
+                            setMode('drag');
+                        } else {
+                            setMode('click');
+                        }
+                        
+                        if (data.question_img) {
+                            document.getElementById('question-img').src = "data:image/png;base64," + data.question_img;
+                            document.getElementById('question-img').style.display = 'inline-block';
+                        } else {
+                            document.getElementById('question-img').style.display = 'none';
+                        }
+                        
+                        output.innerText = "New puzzle received. Awaiting input...";
+                        startPuzzleTimer();
+                        
+                        if (!isMuted) {
+                            const audio = document.getElementById('quack-sound');
+                            if (audio) {
+                                audio.currentTime = 0;
+                                audio.play().catch(e => console.log("Audio blocked by browser autoplay rules."));
+                            }
+                        }
+                        
+                    } else if (data.type === "online_members_list") {
+                        const listEl = document.getElementById('members-list');
+                        if (data.members.length === 0) {
+                            listEl.innerHTML = "<li style='color: #f38ba8;'>No one is online.</li>";
+                        } else {
+                            listEl.innerHTML = data.members.map(m => `<li>🟢 ${m}</li>`).join("");
+                        }
+
+                    } else if (data.type === "messages_update") {
+                        const container = document.getElementById('messages-container');
+                        if (data.messages.length === 0) {
+                            container.innerHTML = "<div style='color: #a6adc8; text-align: center; margin-top: 20px;'>No messages yet.</div>";
+                        } else {
+                            container.innerHTML = data.messages.map(msg => `<div style='margin-bottom: 6px;'>${msg}</div>`).join("");
+                        }
+                        container.scrollTop = container.scrollHeight;
+                    }
+                } catch(e) {
+                    console.error("WebSocket message parsing error:", e);
+                }
+            };
+
+            ws.onclose = function(e) {
+                console.log("WebSocket connection lost:", e.reason || "Server went down or network dropped.");
+                output.innerText = "Connection lost. Reconnecting...";
+                
+                // Show login overlay with reconnect status
+                document.getElementById('login-screen').style.display = 'flex';
+                document.getElementById('login-error').style.display = 'block';
+                document.getElementById('login-error').innerText = "Disconnected from server. Retrying connection...";
+                
+                syncUIWithServer("offline");
+                
+                if (heartbeatInterval) {
+                    clearInterval(heartbeatInterval);
+                    heartbeatInterval = null;
+                }
+                
+                // Try to reconnect in 3 seconds
+                reconnectTimeout = setTimeout(connect, 3000);
+            };
+
+            ws.onerror = function(err) {
+                console.error("WebSocket encountered an error:", err);
+                ws.close(); // Triggers onclose to run connection recovery logic gracefully
+            };
+        }
+
+        // Run connection routine
+        connect();
+
+        // Mobile Device Page Visibility Watcher
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+                    console.log("Mobile wake up detected. Reconnecting WebSocket instantly...");
+                    connect();
+                }
+            }
+        });
+
+        // ==========================================
+        // ONLINE MEMBERS MODAL LOGIC
+        // ==========================================
+        function fetchOnlineMembers() {
+            if (!isOnline && document.getElementById('login-screen').style.display !== 'none') {
+                alert("Please login first.");
+                return;
+            }
+
+            document.getElementById('members-modal').style.display = 'flex';
+            document.getElementById('members-list').innerHTML = "<li style='color: #89b4fa;'>Loading...</li>";
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "get_online_members" }));
+            }
+        }
+
+        function closeMembersModal() {
+            document.getElementById('members-modal').style.display = 'none';
+        }
+
+        // ==========================================
+        // TEAM MESSAGES MODAL LOGIC
+        // ==========================================
+        function openMessagesModal() {
+            if (!isOnline && document.getElementById('login-screen').style.display !== 'none') {
+                alert("Please login first.");
+                return;
+            }
+            document.getElementById('messages-modal').style.display = 'flex';
+            
+            // Ask server for the latest messages
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "get_messages" }));
+            }
+        }
+
+        function closeMessagesModal() {
+            document.getElementById('messages-modal').style.display = 'none';
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const text = input.value.trim();
+            if (!text) return;
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "post_message", text: text }));
+                input.value = ""; // Clear the input field
+            }
+        }
+
+        function deleteAllMessages() {
+            if (confirm("Are you sure you want to delete ALL messages for EVERYONE?")) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "delete_messages" }));
+                }
+            }
+        }
+    </script>
+</body>
+</html>
